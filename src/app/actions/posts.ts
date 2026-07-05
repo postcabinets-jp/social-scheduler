@@ -199,6 +199,164 @@ export async function submitForApproval(postId: string) {
   return { success: true };
 }
 
+export async function getPost(postId: string) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return null;
+
+  const { data } = await supabase
+    .from("posts")
+    .select(
+      `
+      *,
+      post_channels(
+        *,
+        social_accounts(id, platform, display_name, username, avatar_url)
+      ),
+      post_media(*, media_assets(*))
+    `
+    )
+    .eq("id", postId)
+    .eq("workspace_id", workspace.id)
+    .single();
+
+  return data;
+}
+
+export async function schedulePost(postId: string, scheduledAt: string) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  if (!scheduledAt) return { error: "予約日時を指定してください" };
+
+  const scheduledDate = new Date(scheduledAt);
+  if (scheduledDate <= new Date()) {
+    return { error: "予約日時は現在時刻より後に設定してください" };
+  }
+
+  const { error } = await supabase
+    .from("posts")
+    .update({
+      status: "scheduled",
+      scheduled_at: scheduledDate.toISOString(),
+    })
+    .eq("id", postId)
+    .eq("workspace_id", workspace.id)
+    .in("status", ["draft", "approved"]);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/posts");
+  revalidatePath("/queue");
+  revalidatePath("/calendar");
+  return { success: true };
+}
+
+export async function cancelScheduledPost(postId: string) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const { error } = await supabase
+    .from("posts")
+    .update({
+      status: "draft",
+      scheduled_at: null,
+    })
+    .eq("id", postId)
+    .eq("workspace_id", workspace.id)
+    .eq("status", "scheduled");
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/posts");
+  revalidatePath("/queue");
+  revalidatePath("/calendar");
+  return { success: true };
+}
+
+export async function duplicatePost(postId: string) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  // Fetch original post
+  const { data: original } = await supabase
+    .from("posts")
+    .select("content, post_channels(social_account_id, content_override)")
+    .eq("id", postId)
+    .eq("workspace_id", workspace.id)
+    .single();
+
+  if (!original) return { error: "Post not found" };
+
+  // Create duplicate as draft
+  const { data: newPost, error: postError } = await supabase
+    .from("posts")
+    .insert({
+      workspace_id: workspace.id,
+      created_by: user.id,
+      content: original.content,
+      status: "draft",
+    })
+    .select()
+    .single();
+
+  if (postError) return { error: postError.message };
+
+  // Duplicate channel assignments
+  if (original.post_channels && original.post_channels.length > 0) {
+    const channels = original.post_channels.map(
+      (ch: { social_account_id: string; content_override: string | null }) => ({
+        post_id: newPost.id,
+        social_account_id: ch.social_account_id,
+        content_override: ch.content_override,
+        status: "pending" as const,
+      })
+    );
+
+    await supabase.from("post_channels").insert(channels);
+  }
+
+  revalidatePath("/posts");
+  revalidatePath("/queue");
+  return { success: true, postId: newPost.id };
+}
+
+export async function getApprovals() {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return [];
+
+  const { data } = await supabase
+    .from("approval_requests")
+    .select(
+      `
+      *,
+      posts(
+        id, content, created_at,
+        post_channels(
+          *,
+          social_accounts(id, platform, display_name)
+        )
+      )
+    `
+    )
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+
+  // Filter to workspace posts (RLS should handle but be defensive)
+  return (data ?? []).filter(
+    (a) => a.posts && (a.posts as { id: string }).id
+  );
+}
+
 export async function reviewApproval(
   approvalId: string,
   action: "approved" | "rejected",

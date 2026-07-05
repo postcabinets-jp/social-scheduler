@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useTransition } from "react";
 import {
   format,
   startOfMonth,
@@ -13,7 +13,7 @@ import {
   getDay,
 } from "date-fns";
 import { ja } from "date-fns/locale";
-import { createClient } from "@/lib/supabase/client";
+import { getScheduledPosts } from "@/app/actions/posts";
 import { PlatformIcon } from "@/components/ui/platform-icon";
 
 interface ScheduledPost {
@@ -26,39 +26,23 @@ interface ScheduledPost {
   }>;
 }
 
-interface CalendarViewProps {
-  workspaceId: string;
-}
-
-export function CalendarView({ workspaceId }: CalendarViewProps) {
+export function CalendarView() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [loading, setLoading] = useState(true);
+  const [, startTransition] = useTransition();
 
   useEffect(() => {
-    async function fetchPosts() {
-      if (!workspaceId) return;
-      setLoading(true);
-      const supabase = createClient();
-      const start = startOfMonth(currentMonth).toISOString();
-      const end = endOfMonth(currentMonth).toISOString();
+    setLoading(true);
+    const start = startOfMonth(currentMonth).toISOString();
+    const end = endOfMonth(currentMonth).toISOString();
 
-      const { data } = await supabase
-        .from("posts")
-        .select(`
-          id, content, scheduled_at, status,
-          post_channels(social_accounts(platform))
-        `)
-        .eq("workspace_id", workspaceId)
-        .not("scheduled_at", "is", null)
-        .gte("scheduled_at", start)
-        .lte("scheduled_at", end);
-
-      setPosts((data as ScheduledPost[]) ?? []);
+    startTransition(async () => {
+      const data = await getScheduledPosts(start, end);
+      setPosts(data as ScheduledPost[]);
       setLoading(false);
-    }
-    fetchPosts();
-  }, [currentMonth, workspaceId]);
+    });
+  }, [currentMonth]);
 
   const days = eachDayOfInterval({
     start: startOfMonth(currentMonth),

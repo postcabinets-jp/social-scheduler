@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { createClient } from "@/lib/supabase/client";
+import { createTemplate, deleteTemplate } from "@/app/actions/templates";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { ja } from "date-fns/locale";
+import { useRouter } from "next/navigation";
 
 interface Template {
   id: string;
@@ -20,11 +21,10 @@ interface Template {
 
 interface TemplatesViewProps {
   templates: Template[];
-  workspaceId: string;
 }
 
-export function TemplatesView({ templates: initialTemplates, workspaceId }: TemplatesViewProps) {
-  const [templates, setTemplates] = useState(initialTemplates);
+export function TemplatesView({ templates }: TemplatesViewProps) {
+  const router = useRouter();
   const [isCreating, setIsCreating] = useState(false);
   const [name, setName] = useState("");
   const [content, setContent] = useState("");
@@ -37,48 +37,38 @@ export function TemplatesView({ templates: initialTemplates, workspaceId }: Temp
     }
 
     startTransition(async () => {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      const formData = new FormData();
+      formData.set("name", name);
+      formData.set("content", content);
+      formData.set("platforms", JSON.stringify([]));
 
-      const { data, error } = await supabase
-        .from("post_templates")
-        .insert({
-          workspace_id: workspaceId,
-          created_by: user.id,
-          name,
-          content,
-          platforms: [],
-        })
-        .select()
-        .single();
-
-      if (error) {
-        toast.error("作成に失敗しました");
+      const result = await createTemplate(formData);
+      if (result.error) {
+        toast.error(result.error);
       } else {
-        setTemplates((prev) => [data, ...prev]);
         setName("");
         setContent("");
         setIsCreating(false);
         toast.success("テンプレートを作成しました");
+        router.refresh();
       }
     });
   }
 
-  async function handleDelete(id: string) {
+  function handleDelete(id: string) {
     if (!confirm("このテンプレートを削除しますか？")) return;
-    const supabase = createClient();
-    const { error } = await supabase.from("post_templates").delete().eq("id", id);
-    if (error) {
-      toast.error("削除に失敗しました");
-    } else {
-      setTemplates((prev) => prev.filter((t) => t.id !== id));
-      toast.success("削除しました");
-    }
+    startTransition(async () => {
+      const result = await deleteTemplate(id);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success("削除しました");
+        router.refresh();
+      }
+    });
   }
 
   function handleUseTemplate(template: Template) {
-    // Copy to clipboard and redirect to compose
     navigator.clipboard.writeText(template.content);
     toast.success("テキストをコピーしました。投稿作成画面に貼り付けてください。");
   }

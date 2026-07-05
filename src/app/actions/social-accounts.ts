@@ -36,6 +36,99 @@ export async function disconnectAccount(accountId: string) {
   return { success: true };
 }
 
+export async function connectAccount(
+  platform: string,
+  platformUserId: string,
+  displayName: string,
+  accessToken: string,
+  options?: {
+    username?: string;
+    avatarUrl?: string;
+    refreshToken?: string;
+    tokenExpiresAt?: string;
+  }
+) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const { data, error } = await supabase
+    .from("social_accounts")
+    .upsert(
+      {
+        workspace_id: workspace.id,
+        platform,
+        platform_user_id: platformUserId,
+        display_name: displayName,
+        username: options?.username ?? null,
+        avatar_url: options?.avatarUrl ?? null,
+        access_token_enc: accessToken,
+        refresh_token_enc: options?.refreshToken ?? null,
+        token_expires_at: options?.tokenExpiresAt ?? null,
+        is_active: true,
+      },
+      { onConflict: "workspace_id,platform,platform_user_id" }
+    )
+    .select()
+    .single();
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/settings/accounts");
+  revalidatePath("/compose");
+  revalidatePath("/dashboard");
+  return { success: true, account: data };
+}
+
+export async function reconnectAccount(accountId: string) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const { data: account } = await supabase
+    .from("social_accounts")
+    .select("platform")
+    .eq("id", accountId)
+    .eq("workspace_id", workspace.id)
+    .single();
+
+  if (!account) return { error: "Account not found" };
+
+  // In production, this would initiate OAuth re-authorization
+  // Return the redirect URL for the OAuth flow
+  return {
+    redirectUrl: `/api/auth/connect/${account.platform}?reconnect=${accountId}`,
+  };
+}
+
+export async function updateAccountTokens(
+  accountId: string,
+  accessToken: string,
+  refreshToken?: string,
+  expiresAt?: string
+) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const { error } = await supabase
+    .from("social_accounts")
+    .update({
+      access_token_enc: accessToken,
+      refresh_token_enc: refreshToken ?? null,
+      token_expires_at: expiresAt ?? null,
+      is_active: true,
+      last_synced_at: new Date().toISOString(),
+    })
+    .eq("id", accountId)
+    .eq("workspace_id", workspace.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/settings/accounts");
+  return { success: true };
+}
+
 export async function getAnalyticsOverview() {
   const supabase = await createClient();
   const workspace = await getCurrentWorkspace();

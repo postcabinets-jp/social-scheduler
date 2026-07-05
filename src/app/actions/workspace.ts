@@ -93,6 +93,101 @@ export async function updateWorkspaceSettings(formData: FormData) {
   return { success: true };
 }
 
+export async function getWorkspaceMembers() {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return [];
+
+  const { data } = await supabase
+    .from("workspace_members")
+    .select("*, profiles(full_name, avatar_url)")
+    .eq("workspace_id", workspace.id);
+
+  return data ?? [];
+}
+
+export async function removeMember(memberId: string) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  // Cannot remove yourself
+  const { data: member } = await supabase
+    .from("workspace_members")
+    .select("user_id, role")
+    .eq("id", memberId)
+    .eq("workspace_id", workspace.id)
+    .single();
+
+  if (!member) return { error: "Member not found" };
+  if (member.user_id === user.id) return { error: "自分自身は削除できません" };
+
+  // Check caller is admin
+  const { data: callerMembership } = await supabase
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", workspace.id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (callerMembership?.role !== "admin") {
+    return { error: "管理者のみメンバーを削除できます" };
+  }
+
+  const { error } = await supabase
+    .from("workspace_members")
+    .delete()
+    .eq("id", memberId)
+    .eq("workspace_id", workspace.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/settings/team");
+  return { success: true };
+}
+
+export async function updateMemberRole(
+  memberId: string,
+  role: "admin" | "editor" | "viewer"
+) {
+  const supabase = await createClient();
+  const workspace = await getCurrentWorkspace();
+  if (!workspace) return { error: "No workspace" };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  // Check caller is admin
+  const { data: callerMembership } = await supabase
+    .from("workspace_members")
+    .select("role")
+    .eq("workspace_id", workspace.id)
+    .eq("user_id", user.id)
+    .single();
+
+  if (callerMembership?.role !== "admin") {
+    return { error: "管理者のみ権限を変更できます" };
+  }
+
+  const { error } = await supabase
+    .from("workspace_members")
+    .update({ role })
+    .eq("id", memberId)
+    .eq("workspace_id", workspace.id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/settings/team");
+  return { success: true };
+}
+
 export async function inviteMember(formData: FormData) {
   const supabase = await createClient();
 

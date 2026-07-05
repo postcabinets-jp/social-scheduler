@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { inviteMember, removeMember } from "@/app/actions/workspace";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
 
 const ROLE_LABELS: Record<string, { label: string; color: string }> = {
   admin: { label: "管理者", color: "text-blue-600 bg-blue-50" },
@@ -23,17 +25,42 @@ interface Member {
   } | null;
 }
 
-export function TeamSettings({ members, workspaceId }: { members: Member[]; workspaceId: string }) {
+export function TeamSettings({ members }: { members: Member[] }) {
+  const router = useRouter();
   const [isInviting, setIsInviting] = useState(false);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("editor");
+  const [isPending, startTransition] = useTransition();
 
-  async function handleInvite(e: React.FormEvent) {
+  function handleInvite(e: React.FormEvent) {
     e.preventDefault();
-    // In production: send invitation email via Resend
-    toast.info(`招待メールを ${email} に送信しました（デモ）`);
-    setEmail("");
-    setIsInviting(false);
+    startTransition(async () => {
+      const formData = new FormData();
+      formData.set("email", email);
+      formData.set("role", role);
+      const result = await inviteMember(formData);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success(`招待を送信しました`);
+        setEmail("");
+        setIsInviting(false);
+        router.refresh();
+      }
+    });
+  }
+
+  function handleRemove(memberId: string, name: string) {
+    if (!confirm(`${name} をワークスペースから削除しますか？`)) return;
+    startTransition(async () => {
+      const result = await removeMember(memberId);
+      if (result.error) {
+        toast.error(result.error);
+      } else {
+        toast.success("メンバーを削除しました");
+        router.refresh();
+      }
+    });
   }
 
   return (
@@ -74,6 +101,18 @@ export function TeamSettings({ members, workspaceId }: { members: Member[]; work
               <span className={`text-xs font-medium px-2 py-0.5 rounded ${roleInfo.color}`}>
                 {roleInfo.label}
               </span>
+              {member.role !== "admin" && (
+                <button
+                  onClick={() => handleRemove(member.id, name)}
+                  disabled={isPending}
+                  className="text-gray-300 hover:text-red-400 p-1 transition-colors"
+                  title="削除"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
             </div>
           );
         })}
@@ -101,17 +140,17 @@ export function TeamSettings({ members, workspaceId }: { members: Member[]; work
                 onChange={(e) => setRole(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
               >
-                <option value="admin">管理者 — 全権限</option>
-                <option value="editor">編集者 — 投稿作成・編集</option>
-                <option value="viewer">閲覧者 — 閲覧のみ</option>
+                <option value="admin">管理者 -- 全権限</option>
+                <option value="editor">編集者 -- 投稿作成・編集</option>
+                <option value="viewer">閲覧者 -- 閲覧のみ</option>
               </select>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" type="button" onClick={() => setIsInviting(false)}>
                 キャンセル
               </Button>
-              <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">
-                招待メールを送信
+              <Button type="submit" disabled={isPending} className="bg-blue-600 hover:bg-blue-700 text-white">
+                {isPending ? "招待中..." : "招待メールを送信"}
               </Button>
             </div>
           </form>
